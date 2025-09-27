@@ -1,175 +1,111 @@
-// frontend/src/components/ChatView.js
-import React, { useState, useEffect, useRef } from 'react';
-import ApiService from '../services/api';
+import React, { useState, useEffect } from 'react';
 
 const ChatView = () => {
-  const [messages, setMessages] = useState([]);
-  const [inputMessage, setInputMessage] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isConnected, setIsConnected] = useState(true); // Cambiar a true por defecto
-  const messagesEndRef = useRef(null);
+		const [messages, setMessages] = useState([]);
+		const [isFirstVisit, setIsFirstVisit] = useState(true);
+		const [inputMessage, setInputMessage] = useState('');
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+		const keyframesCSS = `
+				@keyframes fadeIn {
+						from {
+								opacity: 0;
+								transform: translateY(10px);
+						}
+						to {
+								opacity: 1;
+								transform: translateY(0);
+						}
+				}
+		`;
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+		useEffect(() => {
+				if (isFirstVisit && messages.length === 0) {
+						const welcomeMessage = {
+								text: "¡Hola! Soy el Ratoncito Pérez 🐭 ¡Bienvenidos a Madrid! Pregúntame cualquier cosa sobre nuestra aventura por la ciudad, los lugares que hemos visto en el mapa, o cuéntame si habéis perdido algún diente recientemente... 🦷✨",
+								sent: false,
+								isWelcome: true,
+								timestamp: Date.now()
+						};
 
-  useEffect(() => {
-    // Mensaje de bienvenida
-    addBotMessage("¡Hola! Soy el Ratoncito Pérez 🐭✨ ¡Bienvenidos a Madrid! ¿Estás listo para explorar la ciudad conmigo?");
+						setTimeout(() => {
+								setMessages([welcomeMessage]);
+						}, 500);
+				}
+		}, [isFirstVisit, messages.length]);
 
-    // Verificar conexión después de un pequeño delay
-    setTimeout(() => {
-      checkConnection();
-    }, 1000);
-  }, []);
+		const handleSendMessage = (e) => {
+				e.preventDefault();
+				if (inputMessage.trim()) {
+						setMessages(prevMessages => {
+								const filteredMessages = prevMessages.filter(msg => !msg.isWelcome);
+								return [...filteredMessages, { text: inputMessage, sent: true, timestamp: Date.now() }];
+						});
+						setInputMessage('');
+						setIsFirstVisit(false);
+				}
+		};
 
-  const checkConnection = async () => {
-    try {
-      const response = await ApiService.healthCheck();
-      console.log('✅ Backend conectado:', response);
-      setIsConnected(true);
-    } catch (error) {
-      console.error('❌ Error conectando con el backend:', error);
-      setIsConnected(false);
-    }
-  };
+		return (
+				<>
+						<style>{keyframesCSS}</style>
+						<div className="flex flex-col h-[calc(100vh-10rem)] md:h-[calc(100vh-4rem)] mt-16 md:mt-20 bg-white">
+								<div className="flex-grow overflow-y-auto px-4 py-5 pb-32 md:pb-20">
+										{messages.length === 0 && !isFirstVisit && (
+												<div className="flex items-center justify-center h-full text-gray-400">
+														<p style={{ fontFamily: 'Quicksand, sans-serif' }}>
+																Comienza una conversación con el Ratoncito Pérez...
+														</p>
+												</div>
+										)}
 
-  const addMessage = (text, sent = false, isError = false) => {
-    const newMessage = {
-      text,
-      sent,
-      isError,
-      timestamp: Date.now()
-    };
-    setMessages(prev => [...prev, newMessage]);
-  };
+										{messages.map((message, index) => (
+												<div
+														key={index}
+														className={`my-3 p-3 rounded-xl max-w-[80%] shadow-sm transition-all duration-300 ${
+																message.sent
+																		? 'bg-gradient-to-r from-orange-400 to-orange-500 text-white ml-auto'
+																		: 'bg-gradient-to-r from-blue-50 to-purple-50 border-2 border-orange-200 text-gray-700 mr-auto'
+														}`}
+														style={{
+																fontFamily: 'Quicksand, sans-serif',
+																animation: message.isWelcome ? 'fadeIn 0.6s ease-out' : 'none'
+														}}
+												>
+														{!message.sent && (
+																<div className="flex items-center gap-2 mb-1">
+																		<span className="text-lg">🐭</span>
+																		<span className="text-xs font-semibold text-orange-500">Ratoncito Pérez</span>
+																</div>
+														)}
+														{message.text}
+												</div>
+										))}
+								</div>
 
-  const addBotMessage = (text) => addMessage(text, false);
-
-  const handleSendMessage = async () => {
-    if (!inputMessage.trim() || isLoading) return; // Remover !isConnected
-
-    const userMessage = inputMessage.trim();
-    setInputMessage('');
-    setIsLoading(true);
-
-    // Agregar mensaje del usuario inmediatamente
-    addMessage(userMessage, true);
-
-    try {
-      console.log('📤 Enviando mensaje:', userMessage);
-
-      // Enviar al backend
-      const response = await ApiService.sendMessage(userMessage);
-
-      console.log('📥 Respuesta recibida:', response);
-
-      // Agregar respuesta del Ratoncito Pérez
-      addBotMessage(response.message || "¡Hola! Soy el Ratoncito Pérez 🐭✨");
-
-    } catch (error) {
-      console.error('❌ Error enviando mensaje:', error);
-      addMessage("¡Oops! Parece que tengo problemas técnicos. ¿Puedes intentar de nuevo? 🐭💫", false, true);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
-    }
-  };
-
-  return (
-    <div className="flex flex-col h-screen bg-gradient-to-b from-blue-50 to-orange-50">
-      {/* Status de conexión */}
-      <div className={`p-3 text-center text-sm font-medium transition-all duration-300 ${
-        isConnected
-          ? 'bg-green-100 text-green-800 border-b border-green-200'
-          : 'bg-red-100 text-red-800 border-b border-red-200'
-      }`}>
-        {isConnected ? '🟢 Conectado con el Ratoncito Pérez' : '🔴 Reconectando...'}
-        <button
-          onClick={checkConnection}
-          className="ml-2 text-xs underline hover:no-underline transition-all duration-200"
-        >
-          {isConnected ? 'Probar conexión' : 'Reintentar'}
-        </button>
-      </div>
-
-      {/* Mensajes */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((message, index) => (
-          <div
-            key={index}
-            className={`flex ${message.sent ? 'justify-end' : 'justify-start'} transition-all duration-300`}
-          >
-            <div className={`max-w-xs lg:max-w-md px-4 py-3 rounded-2xl shadow-sm transition-all duration-200 hover:shadow-md ${
-              message.sent
-                ? 'bg-orange-500 text-white rounded-br-md'
-                : message.isError
-                  ? 'bg-red-100 text-red-800 border border-red-300 rounded-bl-md'
-                  : 'bg-white text-gray-800 border border-gray-200 rounded-bl-md'
-            }`}>
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.text}</p>
-              <span className="text-xs opacity-70 mt-2 block">
-                {new Date(message.timestamp).toLocaleTimeString()}
-              </span>
-            </div>
-          </div>
-        ))}
-
-        {/* Indicador de escritura */}
-        {isLoading && (
-          <div className="flex justify-start animate-pulse">
-            <div className="bg-gray-200 px-4 py-3 rounded-2xl rounded-bl-md">
-              <div className="flex space-x-1">
-                <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input de mensaje */}
-      <div className="border-t bg-white p-4 shadow-lg">
-        <div className="flex space-x-3 max-w-4xl mx-auto">
-          <input
-            type="text"
-            value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder="Escribe tu mensaje al Ratoncito Pérez..."
-            disabled={isLoading} // Solo deshabilitar cuando está cargando
-            className="flex-1 border border-gray-300 rounded-full px-6 py-3
-              focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent
-              disabled:bg-gray-100 disabled:cursor-not-allowed
-              transition-all duration-200 placeholder-gray-400"
-          />
-          <button
-            onClick={handleSendMessage}
-            disabled={isLoading || !inputMessage.trim()} // Solo deshabilitar cuando está cargando o no hay texto
-            className="bg-orange-500 text-white px-8 py-3 rounded-full
-              hover:bg-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-500
-              disabled:bg-gray-300 disabled:cursor-not-allowed
-              transition-all duration-200 font-medium transform hover:scale-105 active:scale-95"
-          >
-            {isLoading ? '⏳' : '📤 Enviar'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+								<form
+										className="fixed bottom-[5rem] md:bottom-4 left-0 right-0 flex p-4 pb-8 md:pb-4 border-t border-orange-200 bg-white shadow-lg"
+										onSubmit={handleSendMessage}
+										style={{ fontFamily: 'Quicksand, sans-serif' }}
+								>
+										<input
+												type="text"
+												value={inputMessage}
+												onChange={(e) => setInputMessage(e.target.value)}
+												placeholder={isFirstVisit ? "Escribe tu primer mensaje al Ratoncito Pérez..." : "Escribe un mensaje..."}
+												className="flex-grow p-3 mr-3 border-2 border-orange-200 rounded-xl focus:border-orange-400 focus:ring-2 focus:ring-orange-200 focus:outline-none transition-colors"
+												style={{ fontFamily: 'Quicksand, sans-serif' }}
+										/>
+										<button
+												type="submit"
+												className="px-6 py-3 bg-gradient-to-r from-orange-400 to-orange-500 text-white font-semibold rounded-xl cursor-pointer hover:from-orange-500 hover:to-orange-600 transition-all transform hover:scale-105 shadow-lg"
+												style={{ fontFamily: 'Quicksand, sans-serif' }}
+										>
+												Enviar
+										</button>
+								</form>
+						</div>
+				</>
+		);
 };
 
 export default ChatView;

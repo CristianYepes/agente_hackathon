@@ -1,177 +1,276 @@
-# backend/src/api/main.py
+from .game_crew_explain import router as crew_explain_router
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 import os
 import logging
 from dotenv import load_dotenv
-import uuid
-from datetime import datetime
 
-# Cargar variables de entorno
+# Load environment variables from .env file in backend directory
 backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 dotenv_path = os.path.join(backend_dir, '.env')
 load_dotenv(dotenv_path)
 
-from .models import ChatRequest, ChatResponse, Location, FamilyProfile, HealthResponse
+from .models import ChatRequest, ChatResponse, Location
+from src.langgraph.narrative_flow import narrative_graph
 
-# Configurar logging
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Inicializar FastAPI
+# Initialize FastAPI app
 app = FastAPI(
     title="Ratoncito Pérez - Guía Mágico de Madrid",
     description="API del agente narrativo del Ratoncito Pérez para familias visitando Madrid",
     version="1.0.0"
 )
 
-# Configurar CORS
+# Configure CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # Frontend URLs
+    allow_origins=["*"],  # In production, specify your frontend domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Configurar archivos estáticos del frontend
-frontend_build_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend", "build")
-if os.path.exists(frontend_build_path):
-    app.mount("/static", StaticFiles(directory=frontend_build_path), name="static")
+# Serve static files (frontend)
+frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend")
+if os.path.exists(frontend_path):
+    app.mount("/static", StaticFiles(directory=frontend_path), name="static")
+
+app.include_router(crew_explain_router)
+
 
 @app.get("/")
 async def root():
-    """Servir frontend o información de la API"""
-    frontend_index = os.path.join(frontend_build_path, "index.html")
-    if os.path.exists(frontend_index):
-        return FileResponse(frontend_index)
+    """
+    Serve the frontend HTML or API information
+    """
+    # Try to serve frontend HTML
+    frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend", "index.html")
+    if os.path.exists(frontend_path):
+        from fastapi.responses import FileResponse
+        return FileResponse(frontend_path)
 
+    # Fallback to API info
     return {
         "message": "¡Hola! Soy el Ratoncito Pérez 🐭✨",
         "status": "active",
         "version": "1.0.0",
-        "frontend": "Frontend not found - run 'npm run build' in frontend/",
+        "frontend": "Frontend not found - check file paths",
         "endpoints": {
             "chat": "/chat",
             "health": "/health",
-            "locations": "/madrid-locations",
-            "docs": "/docs"
+            "locations": "/madrid-locations"
         }
     }
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    try:
-        from src.langgraph.narrative_flow import narrative_graph
-        graph_status = "active"
-    except Exception as e:
-        logger.error(f"Graph import error: {e}")
-        graph_status = f"error: {str(e)}"
-
+    """
+    Health check endpoint
+    """
     groq_configured = bool(os.getenv("GROQ_API_KEY"))
     weather_configured = bool(os.getenv("OPENWEATHER_API_KEY"))
 
-    return HealthResponse(
-        status="healthy",
-        services={
+    return {
+        "status": "healthy",
+        "services": {
             "groq_llm": "configured" if groq_configured else "using_mock",
             "weather_api": "configured" if weather_configured else "using_mock",
             "location_service": "active",
-            "narrative_engine": graph_status
-        },
-        cors="enabled",
-        frontend_path=frontend_build_path if os.path.exists(frontend_build_path) else None
-    )
+            "narrative_engine": "active"
+        }
+    }
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_with_ratoncito(request: ChatRequest):
-    """Endpoint principal del chat con el Ratoncito Pérez"""
+    """
+    Main chat endpoint - interact with Ratoncito Pérez
+    """
     try:
-        # Importar aquí para evitar imports circulares
-        from src.langgraph.narrative_flow import narrative_graph
+        logger.info(f"Chat request for location: {request.location.place_name}")
 
-        # Generar session_id si no existe
-        session_id = request.session_id or str(uuid.uuid4())
+        # Validate location (basic check for Madrid area)
+        if not _is_madrid_area(request.location):
+            return ChatResponse(
+                response="¡Ups! Parece que no estáis en Madrid. Soy el Ratoncito Pérez de Madrid, ¡esperaros cuando vengáis a visitarme! 🐭✨",
+                activities=[],
+                suggestions=["Visitad Madrid para vivir aventuras mágicas conmigo"],
+                location_context="Fuera de Madrid"
+            )
 
-        # Configurar para LangGraph
-        config = {
-            "configurable": {
-                "thread_id": session_id,
-                "user_id": request.user_id or "anonymous"
-            }
-        }
+        # Process request through Real Multi-Agent LangGraph System
+        response_text = narrative_graph.process_request(
+            latitude=request.location.latitude,
+            longitude=request.location.longitude,
+            family_profile=request.family_profile.__dict__,
+            user_message=request.message
+        )
 
-        # Preparar el estado inicial
-        initial_state = {
-            "user_message": request.message,
-            "current_step": "start",
-            "user_location": request.location.dict() if request.location else None,
-            "family_profile": request.family_profile.dict() if request.family_profile else None,
-            "context_info": request.context,
-            "session_id": session_id
-        }
+        # Generate follow-up suggestions
+        suggestions = _generate_follow_up_suggestions(request.location.place_name)
 
-        # Invocar el grafo de LangGraph
-        logger.info(f"Processing message: {request.message[:50]}...")
-        result = await narrative_graph.ainvoke(initial_state, config=config)
-
-        # Extraer respuesta
-        response_message = result.get("magical_response", "¡Hola! Soy el Ratoncito Pérez. ¿En qué puedo ayudarte? 🐭✨")
+        # Get activity suggestions (these would be generated by the graph in full implementation)
+        activities = _get_quick_activities(request.location.place_name, len(request.family_profile.children))
 
         return ChatResponse(
-            message=response_message,
-            session_id=session_id,
-            suggestions=result.get("suggested_activities", []),
-            locations_suggested=[],  # TODO: mapear ubicaciones sugeridas
-            context_used=str(result.get("context_info", "")),
-            timestamp=datetime.now()
+            response=response_text,
+            activities=activities,
+            suggestions=suggestions,
+            location_context=f"En {request.location.place_name}"
         )
 
     except Exception as e:
-        logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
+        logger.error(f"Chat error: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Error procesando mensaje: {str(e)}"
+            detail="¡Ups! El Ratoncito Pérez está ocupado guardando dientes. ¡Inténtalo de nuevo en un momentito! 🐭"
         )
 
 @app.get("/madrid-locations")
 async def get_madrid_locations():
-    """Obtener ubicaciones principales de Madrid"""
-    locations = [
-        Location(
-            latitude=40.4170,
-            longitude=-3.7032,
-            name="Puerta del Sol",
-            address="Puerta del Sol, 28013 Madrid",
-            category="historico"
-        ),
-        Location(
-            latitude=40.4152,
-            longitude=-3.6844,
-            name="Parque del Retiro",
-            address="Plaza de la Independencia, 7, 28001 Madrid",
-            category="parque"
-        ),
-        Location(
-            latitude=40.4238,
-            longitude=-3.6921,
-            name="Museo del Prado",
-            address="Calle de Ruiz de Alarcón, 23, 28014 Madrid",
-            category="museo"
-        ),
-        Location(
-            latitude=40.4200,
-            longitude=-3.7088,
-            name="Palacio Real",
-            address="Calle de Bailén, s/n, 28071 Madrid",
-            category="historico"
-        )
+    """
+    Get popular Madrid locations for the frontend
+    """
+    return {
+        "popular_locations": [
+            {
+                "name": "Plaza Mayor",
+                "type": "plaza",
+                "description": "El corazón histórico de Madrid",
+                "coordinates": {"lat": 40.4155, "lon": -3.7074}
+            },
+            {
+                "name": "Palacio Real de Madrid",
+                "type": "palace",
+                "description": "El majestuoso palacio de los reyes",
+                "coordinates": {"lat": 40.4179, "lon": -3.7142}
+            },
+            {
+                "name": "Parque del Retiro",
+                "type": "park",
+                "description": "El pulmón verde de Madrid",
+                "coordinates": {"lat": 40.4153, "lon": -3.6844}
+            },
+            {
+                "name": "Puerta del Sol",
+                "type": "plaza",
+                "description": "El kilómetro cero de España",
+                "coordinates": {"lat": 40.4168, "lon": -3.7038}
+            },
+            {
+                "name": "Plaza de Cibeles",
+                "type": "plaza",
+                "description": "La diosa protectora de Madrid",
+                "coordinates": {"lat": 40.4192, "lon": -3.6927}
+            }
+        ]
+    }
+
+@app.post("/location/detect")
+async def detect_location(coordinates: dict):
+    """
+    Helper endpoint to detect location from GPS coordinates
+    """
+    try:
+        from src.tools.location_tools import get_location_context
+
+        lat = coordinates.get("latitude")
+        lon = coordinates.get("longitude")
+
+        if not lat or not lon:
+            raise HTTPException(status_code=400, detail="Latitude and longitude required")
+
+        location_context = get_location_context(lat, lon)
+
+        return {
+            "detected_location": location_context,
+            "is_madrid": _is_madrid_area(Location(latitude=lat, longitude=lon))
+        }
+
+    except Exception as e:
+        logger.error(f"Location detection error: {e}")
+        raise HTTPException(status_code=500, detail="Error detecting location")
+
+def _is_madrid_area(location: Location) -> bool:
+    """
+    Check if coordinates are within Madrid metropolitan area
+    """
+    # Madrid bounding box (approximate)
+    madrid_bounds = {
+        "north": 40.5,
+        "south": 40.3,
+        "east": -3.5,
+        "west": -3.9
+    }
+
+    return (
+        madrid_bounds["south"] <= location.latitude <= madrid_bounds["north"] and
+        madrid_bounds["west"] <= location.longitude <= madrid_bounds["east"]
+    )
+
+def _generate_follow_up_suggestions(place_name: str) -> list:
+    """
+    Generate contextual follow-up suggestions
+    """
+    base_suggestions = [
+        "¿Qué más me puedes contar de este lugar?",
+        "¿Hay alguna leyenda especial aquí?",
+        "¿Qué actividad podemos hacer ahora?"
     ]
-    return locations
+
+    location_specific = {
+        "Plaza Mayor": ["¿Quién vivía en estos edificios?", "¿Qué fiestas se celebraban aquí?"],
+        "Palacio Real": ["¿Podemos ver los jardines?", "¿Qué tesoros hay dentro?"],
+        "Parque del Retiro": ["¿Qué animales viven aquí?", "¿Podemos ir al estanque?"]
+    }
+
+    specific = location_specific.get(place_name, [])
+    return base_suggestions + specific
+
+def _get_quick_activities(place_name: str, num_children: int) -> list:
+    """
+    Get quick activity suggestions based on location
+    """
+    activities_db = {
+        "Plaza Mayor": [
+            "Contar las ventanas de los edificios rojos",
+            "Buscar la estatua del rey a caballo",
+            "Imaginar las fiestas de hace 400 años"
+        ],
+        "Palacio Real": [
+            "Contar las columnas de la fachada",
+            "Buscar los escudos reales",
+            "Imaginar la vida de los príncipes"
+        ],
+        "Parque del Retiro": [
+            "Buscar ardillas en los árboles",
+            "Contar patos en el estanque",
+            "Explorar senderos secretos"
+        ]
+    }
+
+    default_activities = [
+        "Explorar cada rincón del lugar",
+        "Buscar detalles que otros no ven",
+        "Crear una historia mágica juntos"
+    ]
+
+    return activities_db.get(place_name, default_activities)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 8000))
+    debug = os.getenv("DEBUG", "False").lower() == "true"
+
+    uvicorn.run(
+        "main:app",
+        host=host,
+        port=port,
+        reload=debug,
+        log_level="info"
+    )

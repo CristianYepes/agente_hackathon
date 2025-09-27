@@ -23,7 +23,9 @@ const GameEngine = ({ location, age, onReward }) => {
       setLoading(true);
       setAgentReply('');
       try {
-        const res = await fetch('http://localhost:8000/game/crew-explain', {
+        // Use REACT_APP_API_URL if provided, otherwise use a relative path so CRA's proxy can forward to backend in development
+        const apiBase = process.env.REACT_APP_API_URL || '';
+        const res = await fetch(`${apiBase}/game/crew-explain`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -37,6 +39,8 @@ const GameEngine = ({ location, age, onReward }) => {
         const data = await res.json();
         setAgentReply(data.reply);
       } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('Error contacting backend:', err);
         setAgentReply('No se pudo obtener respuesta educativa.');
       }
       setLoading(false);

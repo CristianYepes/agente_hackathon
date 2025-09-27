@@ -4,9 +4,23 @@ Rol: Psicólogo infantil virtual y adaptador de contenido
 """
 
 from typing import Dict, Any, List
-from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
+try:
+    from langchain_core.tools import tool
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_groq import ChatGroq
+except Exception:
+    def tool(fn):
+        return fn
+
+    class HumanMessage:
+        def __init__(self, content: str):
+            self.content = content
+
+    class SystemMessage:
+        def __init__(self, content: str):
+            self.content = content
+
+    ChatGroq = None
 import logging
 import os
 
@@ -30,32 +44,19 @@ def analyze_family_dynamics(family_profile: Dict[str, Any]) -> Dict[str, Any]:
         if not children:
             children = [{"age": 7, "name": "pequeño aventurero"}]  # Default
         
-        # Convert Child objects to dictionaries if needed
-        children_data = []
-        for child in children:
-            if hasattr(child, '__dict__'):  # If it's a Pydantic model
-                child_dict = {
-                    "age": getattr(child, 'age', 7),
-                    "gender": getattr(child, 'gender', 'child'),
-                    "name": getattr(child, 'name', None) or "aventurero"
-                }
-            else:  # If it's already a dict
-                child_dict = child
-            children_data.append(child_dict)
-        
-        ages = [child.get("age", 7) for child in children_data]
+        ages = [child.get("age", 7) for child in children]
         min_age = min(ages)
         max_age = max(ages)
         age_span = max_age - min_age
         
         # Analyze family composition
         family_analysis = {
-            "total_children": len(children_data),
+            "total_children": len(children),
             "age_range": {"min": min_age, "max": max_age, "span": age_span},
             "family_type": _determine_family_type(ages),
             "attention_span": _calculate_attention_span(ages),
             "language_complexity": _determine_language_level(ages),
-            "activity_preferences": _analyze_activity_preferences(children_data, family_profile),
+            "activity_preferences": _analyze_activity_preferences(children, family_profile),
             "special_considerations": _get_special_considerations(ages, family_profile)
         }
         
@@ -505,15 +506,17 @@ class FamilyDynamicsAgent:
     def _initialize_llm(self):
         """Initialize Groq LLM for the agent"""
         api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise ValueError("GROQ_API_KEY not found in environment variables")
-            
-        return ChatGroq(
-            groq_api_key=api_key,
-            model_name="llama-3.1-8b-instant",
-            temperature=0.3,
-            max_tokens=600
-        )
+        if not api_key or ChatGroq is None:
+            return None
+        try:
+            return ChatGroq(
+                groq_api_key=api_key,
+                model_name="llama-3.1-8b-instant",
+                temperature=0.4,
+                max_tokens=800
+            )
+        except Exception:
+            return None
     
     def analyze_and_adapt(self, family_profile: Dict[str, Any], location_data: Dict[str, Any]) -> Dict[str, Any]:
         """

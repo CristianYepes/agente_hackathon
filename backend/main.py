@@ -1,39 +1,16 @@
-# backend/main.py
-from fastapi import FastAPI, Depends
-from pydantic import BaseModel
+import sys
 import os
+from dotenv import load_dotenv
 
-app = FastAPI()
+# Load environment variables from .env file in current directory
+current_dir = os.path.dirname(os.path.abspath(__file__))
+dotenv_path = os.path.join(current_dir, '.env')
+load_dotenv(dotenv_path)
 
-class HealthResponse(BaseModel):
-    status: str
-    services: dict
-    cors: str
-    frontend_path: str | None
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-@app.get("/health", response_model=HealthResponse)
-async def health_check(use_mock: bool = False):
-    # Merge logic from both versions
-    try:
-        if not use_mock:
-            from src.langgraph.narrative_flow import narrative_graph
-            graph_status = "active"
-        else:
-            graph_status = "using_mock"
-    except Exception as e:
-        graph_status = f"error: {str(e)}"
+from src.api.main import app
 
-    groq_configured = bool(os.getenv("GROQ_API_KEY"))
-    weather_configured = bool(os.getenv("OPENWEATHER_API_KEY"))
-
-    return HealthResponse(
-        status="healthy",
-        services={
-            "groq_llm": "configured" if groq_configured else "using_mock",
-            "weather_api": "configured" if weather_configured else "using_mock",
-            "location_service": "active",
-            "narrative_engine": graph_status
-        },
-        cors="enabled",
-        frontend_path=frontend_build_path if os.path.exists(frontend_build_path) else None
-    )
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)

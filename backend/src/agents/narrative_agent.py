@@ -4,9 +4,23 @@ Rol: Narrador mágico y coordinador de actividades
 """
 
 from typing import Dict, Any, List
-from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
+try:
+    from langchain_core.tools import tool
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_groq import ChatGroq
+except Exception:
+    def tool(fn):
+        return fn
+
+    class HumanMessage:
+        def __init__(self, content: str):
+            self.content = content
+
+    class SystemMessage:
+        def __init__(self, content: str):
+            self.content = content
+
+    ChatGroq = None
 import logging
 import os
 import random
@@ -315,19 +329,20 @@ class RatoncitoNarrativeAgent:
     def _initialize_llm(self):
         """Initialize Groq LLM for the Ratoncito agent"""
         api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise ValueError("GROQ_API_KEY not found in environment variables")
-            
-        return ChatGroq(
-            groq_api_key=api_key,
-            model_name="llama-3.1-8b-instant",
-            temperature=0.8,  # Higher creativity for storytelling
-            max_tokens=1200
-        )
+        if not api_key or ChatGroq is None:
+            return None
+        try:
+            return ChatGroq(
+                groq_api_key=api_key,
+                model_name="llama-3.1-8b-instant",
+                temperature=0.8,  # Higher creativity for storytelling
+                max_tokens=1200
+            )
+        except Exception:
+            return None
     
     def create_magical_response(self, location_data: Dict, family_profile: Dict, 
-                              weather_data: Dict, user_message: str, family_adaptation: Dict = None,
-                              is_first_interaction: bool = True) -> str:
+                              weather_data: Dict, user_message: str, family_adaptation: Dict = None) -> str:
         """
         Main method to create enhanced magical response as Ratoncito Pérez
         
@@ -337,7 +352,6 @@ class RatoncitoNarrativeAgent:
             weather_data: Weather context
             user_message: User's input message
             family_adaptation: Family dynamics analysis (optional)
-            is_first_interaction: Whether this is the first interaction (controls greeting)
             
         Returns:
             Enhanced magical response string from Ratoncito Pérez
@@ -352,13 +366,11 @@ class RatoncitoNarrativeAgent:
             
             logger.info(f"🐭 Creating enhanced magical response for {location_name}")
             
-            # Step 1: Generate personalized greeting (only for first interaction)
-            greeting = ""
-            if is_first_interaction:
-                greeting = create_personalized_greeting.invoke({
-                    "family_profile": family_profile,
-                    "location_name": location_name
-                })
+            # Step 1: Generate personalized greeting
+            greeting = create_personalized_greeting.invoke({
+                "family_profile": family_profile,
+                "location_name": location_name
+            })
             
             # Step 2: Generate magic story with historical context
             enhanced_location_info = {
@@ -386,8 +398,7 @@ class RatoncitoNarrativeAgent:
             # Step 4: Create enhanced magical response
             complete_response = self._synthesize_enhanced_magical_response(
                 greeting, magic_story, activities, location_data, 
-                historical_context, weather_data, family_adaptation, user_message,
-                is_first_interaction
+                historical_context, weather_data, family_adaptation, user_message
             )
             
             return complete_response
@@ -398,8 +409,7 @@ class RatoncitoNarrativeAgent:
     
     def _synthesize_enhanced_magical_response(self, greeting: str, story: str, activities: List[Dict],
                                             location_data: Dict, historical_context: Dict, 
-                                            weather_data: Dict, family_adaptation: Dict, user_message: str,
-                                            is_first_interaction: bool = True) -> str:
+                                            weather_data: Dict, family_adaptation: Dict, user_message: str) -> str:
         """
         Use LLM to create enhanced cohesive magical response with all contexts
         """
@@ -436,14 +446,14 @@ CONTEXTO DE LA UBICACIÓN:
 - Clima: {weather_data.get('condition', 'agradable')}
 
 ELEMENTOS DISPONIBLES:
-{"1. Saludo: " + greeting[:100] + "..." if is_first_interaction and greeting else ""}
+1. Saludo: {greeting[:100]}...
 2. Historia mágica: {story[:150]}...
 3. Actividades sugeridas:
 {activity_list}
 
 INSTRUCCIONES:
 Tu respuesta debe:
-{"1. Incorporar el saludo personalizado de forma natural (SOLO SI ES PRIMERA INTERACCIÓN)" if is_first_interaction else "1. NO incluir saludo largo, responder directamente"}
+1. Incorporar el saludo personalizado de forma natural
 2. Tejer la historia mágica con datos históricos reales
 3. Responder específicamente al mensaje del usuario: "{user_message}"
 4. Sugerir 2-3 actividades de forma emocionante
@@ -451,8 +461,6 @@ Tu respuesta debe:
 6. Mantener el tono mágico pero incluir información real
 7. Usar emojis apropiados (🐭✨🏰🌟💫)
 8. Terminar con una invitación a la aventura
-
-{"IMPORTANTE: Esta es la PRIMERA interacción, usa el saludo completo." if is_first_interaction else "IMPORTANTE: Esta NO es la primera interacción, NO uses saludo largo, responde directamente como si ya nos conocemos."}
 
 Máximo 400 palabras. NO menciones errores técnicos. TODO es magia pura.
 """
